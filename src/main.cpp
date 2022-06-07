@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include <Servo.h>
-
-Servo servo;
-int pos = 0; // Servo position
+#include "secrets.h"
+#include <ArduinoJson.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include "weather.hpp"
 
 // Pinout for nodemcu with Arduino framework: https://mechatronicsblog.com/esp8266-nodemcu-pinout-for-arduino-ide/
 // | Pin  | Code     | Arduino alias |
@@ -26,14 +28,6 @@ int pos = 0; // Servo position
 #define PIN_SERVO 2 // D4
 #define PIN_LED 0 // D3
 
-void colorWipe(uint32_t c, uint8_t wait);
-void rainbow(uint8_t wait);
-void rainbowCycle(uint8_t wait);
-void rainbow(uint8_t wait);
-void theaterChase(uint32_t c, uint8_t wait);
-void theaterChaseRainbow(uint8_t wait);
-uint32_t Wheel(byte WheelPos);
-
 // Parameter 1 = number of pixels in strip
 // Parameter 2 = Arduino pin number (most are valid)
 // Parameter 3 = pixel type flags, add together as needed:
@@ -44,25 +38,43 @@ uint32_t Wheel(byte WheelPos);
 //   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(35, PIN_LED, NEO_GRB + NEO_KHZ400);
 
-// IMPORTANT: To reduce NeoPixel burnout risk, add 1000 uF capacitor across
-// pixel power leads, add 300 - 500 Ohm resistor on first pixel's data input
-// and minimize distance between Arduino and first pixel.  Avoid connecting
-// on a live circuit...if you must, connect GND first.
+WiFiClient client;
+int status = WL_IDLE_STATUS;
+String text;
+int jsonend = 0;
+boolean startJson = false;
+boolean has_connected = false;
 
-void setup() {
-  Serial.begin(115200);
-  Serial.println("Starting!");
-  strip.begin();
-  strip.setBrightness(255);
-  strip.show(); // Initialize all pixels to 'off'
-  servo.attach(PIN_SERVO, 800, 2600); // attaches the servo on pin 18 to the servo object
-}
+void printWiFiStatus();
+void parseJson(const char * jsonString);
+void makehttpRequest();
+void diffDataAction(String nowT, String later, String weatherType);
+void colorWipe(uint32_t c, uint8_t wait);
+void rainbow(uint8_t wait);
+void rainbowCycle(uint8_t wait);
+void rainbow(uint8_t wait);
+void theaterChase(uint32_t c, uint8_t wait);
+void theaterChaseRainbow(uint8_t wait);
+uint32_t Wheel(byte WheelPos);
+
+int rainLed = 2;  // Indicates rain
+int clearLed = 3; // Indicates clear sky or sunny
+int snowLed = 4;  // Indicates snow
+int hailLed = 5;  // Indicates hail
+
+// Open Weather Map API server name
+const char server[] = "api.openweathermap.org";
+
+Servo servo;
+int pos = 0; // Servo position
 
 enum weather_t {
   cloudy,
   rainy,
   thunder,
-  clear
+  clear,
+  snowy,
+  haily
 };
 
 void set_weather(weather_t weather, int sun_status_int) {
@@ -89,6 +101,181 @@ void set_weather(weather_t weather, int sun_status_int) {
   Serial.println(sun_status_int);
 }
 
+// print Wifi status
+void printWiFiStatus() {
+  // print the SSID of the network you're attached to:
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // print your WiFi shield's IP address:
+  IPAddress ip = WiFi.localIP();
+  Serial.print("IP Address: ");
+  Serial.println(ip);
+
+  // print the received signal strength:
+  long rssi = WiFi.RSSI();
+  Serial.print("signal strength (RSSI):");
+  Serial.print(rssi);
+  Serial.println(" dBm");
+}
+
+//to parse json data recieved from OWM
+void parseJson(const char * jsonString) {
+  //StaticJsonBuffer<4000> jsonBuffer;
+  const size_t bufferSize = 2*JSON_ARRAY_SIZE(1) + JSON_ARRAY_SIZE(2) + 4*JSON_OBJECT_SIZE(1) + 3*JSON_OBJECT_SIZE(2) + 3*JSON_OBJECT_SIZE(4) + JSON_OBJECT_SIZE(5) + 2*JSON_OBJECT_SIZE(7) + 2*JSON_OBJECT_SIZE(8) + 720;
+  DynamicJsonDocument jsonBuffer(bufferSize);
+
+  // FIND FIELDS IN JSON TREE
+  auto error = deserializeJson(jsonBuffer, jsonString);
+  if (error) {
+    Serial.println("parseObject() failed");
+    return;
+  }
+  JsonObject root = jsonBuffer.as<JsonObject>();
+
+  JsonArray list = root["list"];
+  JsonObject nowT = list[0];
+  JsonObject later = list[1];
+
+  // including temperature and humidity for those who may wish to hack it in
+  
+  String city = root["city"]["name"];
+  
+  float tempNow = nowT["main"]["temp"];
+  float humidityNow = nowT["main"]["humidity"];
+  String weatherNow = nowT["weather"][0]["description"];
+
+  float tempLater = later["main"]["temp"];
+  float humidityLater = later["main"]["humidity"];
+  String weatherLater = later["weather"][0]["description"];
+
+  // checking for four main weather possibilities
+  diffDataAction(weatherNow, weatherLater, "clear");
+  diffDataAction(weatherNow, weatherLater, "rain");
+  diffDataAction(weatherNow, weatherLater, "snow");
+  diffDataAction(weatherNow, weatherLater, "hail");
+  
+  Serial.println();
+}
+
+// to request data from OWM
+void makehttpRequest() {
+  // close any connection before send a new request to allow client make connection to server
+  client.stop();
+
+  // if there's a successful connection:
+  if (client.connect(server, 80)) {
+    // Serial.println("connecting...");
+    // send the HTTP PUT request:
+    client.println("GET /data/2.5/forecast?q=" + nameOfCity + "&APPID=" + open_weather_map_api_key + "&mode=json&units=metric&cnt=2 HTTP/1.1");
+    client.println("Host: api.openweathermap.org");
+    client.println("User-Agent: ArduinoWiFi/1.1");
+    client.println("Connection: close");
+    client.println();
+    
+    unsigned long timeout = millis();
+    while (client.available() == 0) {
+      if (millis() - timeout > 5000) {
+        Serial.println(">>> Client Timeout !");
+        client.stop();
+        return;
+      }
+    }
+    
+    char c = 0;
+    while (client.available()) {
+      c = client.read();
+      // since json contains equal number of open and close curly brackets, this means we can determine when a json is completely received  by counting
+      // the open and close occurences,
+      //Serial.print(c);
+      if (c == '{') {
+        startJson = true;         // set startJson true to indicate json message has started
+        jsonend++;
+      }
+      if (c == '}') {
+        jsonend--;
+      }
+      if (startJson == true) {
+        text += c;
+      }
+      // if jsonend = 0 then we have have received equal number of curly braces 
+      if (jsonend == 0 && startJson == true) {
+        parseJson(text.c_str());  // parse c string text in parseJson function
+        text = "";                // clear text string for the next time
+        startJson = false;        // set startJson to false to indicate that a new message has not yet started
+        has_connected = true;
+      }
+    }
+  }
+  else {
+    // if no connction was made:
+    Serial.println("connection failed");
+    return;
+  }
+}
+
+//representing the data
+void diffDataAction(String nowT, String later, String weatherType) {
+  int indexNow = nowT.indexOf(weatherType);
+  int indexLater = later.indexOf(weatherType);
+  // if weather type = rain, if the current weather does not contain the weather type and the later message does, send notification
+  if (weatherType == "rain") { 
+    if (indexNow == -1 && indexLater != -1) {
+      set_weather(rainy, 0);
+      Serial.println("Oh no! It is going to " + weatherType + " later! Predicted " + later);
+    }
+  }
+  // for snow
+  else if (weatherType == "snow") {
+    if (indexNow == -1 && indexLater != -1) {
+      set_weather(snowy, 0);
+      Serial.println("Oh no! It is going to " + weatherType + " later! Predicted " + later);
+    }
+    
+  }
+  // can't remember last time I saw hail anywhere but just in case
+  else if (weatherType == "hail") { 
+   if (indexNow == -1 && indexLater != -1) {
+      set_weather(haily, 0);
+      Serial.println("Oh no! It is going to " + weatherType + " later! Predicted " + later);
+   }
+
+  }
+  // for clear sky, if the current weather does not contain the word clear and the later message does, send notification that it will be sunny later
+  else {
+    if (indexNow == -1 && indexLater != -1) {
+      Serial.println("It is going to be sunny later! Predicted " + later);
+      set_weather(clear, 0);
+    }
+  }
+}
+
+// IMPORTANT: To reduce NeoPixel burnout risk, add 1000 uF capacitor across
+// pixel power leads, add 300 - 500 Ohm resistor on first pixel's data input
+// and minimize distance between Arduino and first pixel.  Avoid connecting
+// on a live circuit...if you must, connect GND first.
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Starting!");
+  strip.begin();
+  strip.setBrightness(255);
+  strip.show(); // Initialize all pixels to 'off'
+  servo.attach(PIN_SERVO, 800, 2600); // attaches the servo on pin 18 to the servo object
+
+  text.reserve(JSON_BUFF_DIMENSION);
+  
+  WiFi.begin(ssid,pass);
+  Serial.println("connecting");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi Connected");
+  printWiFiStatus();
+}
+
+
 void loop() {
   // Serial.println("Wipe");
   // colorWipe(strip.Color(255, 0, 0), 50);
@@ -97,11 +284,20 @@ void loop() {
   // delay(1000);
   // colorWipe(strip.Color(0, 0, 255), 50);
   // delay(1000);
-  set_weather(cloudy, random(0, 180));
-  set_weather(rainy, random(0, 180));
-  set_weather(thunder, random(0, 180));
-  set_weather(clear, random(0, 180));
-  Serial.println("Rainbow");
+
+  //OWM requires 10mins between request intervals
+  //check if 10mins has passed then conect again and pull
+  if (millis() - lastConnectionTime > postInterval || ! has_connected) {
+    Serial.println("Requesting");
+    lastConnectionTime = millis();
+    lastConnectionTime = millis();
+    makehttpRequest();
+  }
+
+  // set_weather(rainy, random(0, 180));
+  // set_weather(thunder, random(0, 180));
+  // set_weather(clear, random(0, 180));
+  // Serial.println("Rainbow");
   rainbow(20);
 }
 
