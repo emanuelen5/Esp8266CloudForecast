@@ -58,15 +58,51 @@ void setup() {
   servo.attach(PIN_SERVO, 800, 2600); // attaches the servo on pin 18 to the servo object
 }
 
-void loop() {
-  pos = Serial.parseInt();
-  if (pos == 0) {
-    Serial.println("No number was read");
-    return;
+enum weather_t {
+  cloudy,
+  rainy,
+  thunder,
+  clear
+};
+
+void set_weather(weather_t weather, int sun_status_int) {
+  if (weather == cloudy) {
+    Serial.println("Cloudy");
+    colorWipe(strip.Color(255, 255, 255), 50);
+  } else if (weather == rainy) {
+    Serial.println("Rainy");
+    colorWipe(strip.Color(20, 20, 255), 50);
+  } else if (weather == thunder) {
+    Serial.println("Thunder");
+    for (int t=0; t<3; t++) {
+      colorWipe(strip.Color(20, 20, 255), 30);
+      colorWipe(strip.Color(255, 255, 255), 0);
+    }
+  } else if (weather == clear) {
+    Serial.println("Clear");
+    colorWipe(strip.Color(127, 127, 0), 50);
   }
-  Serial.print("Servo position: ");
-  Serial.println(pos);
-  servo.writeMicroseconds(pos);
+  // sun_status = max(0.0, min(sun_status, 1.0)) * 180;
+  // int sun_status_int = sun_status;
+  servo.write(sun_status_int);
+  Serial.print("Sun status: ");
+  Serial.println(sun_status_int);
+}
+
+void loop() {
+  // Serial.println("Wipe");
+  // colorWipe(strip.Color(255, 0, 0), 50);
+  // delay(1000);
+  // colorWipe(strip.Color(0, 255, 0), 50);
+  // delay(1000);
+  // colorWipe(strip.Color(0, 0, 255), 50);
+  // delay(1000);
+  set_weather(cloudy, random(0, 180));
+  set_weather(rainy, random(0, 180));
+  set_weather(thunder, random(0, 180));
+  set_weather(clear, random(0, 180));
+  Serial.println("Rainbow");
+  rainbow(20);
 }
 
 // Fill the dots one after the other with a color
