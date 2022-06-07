@@ -1,7 +1,30 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
+#include <Servo.h>
 
-#define PIN 0
+Servo servo;
+int pos = 0; // Servo position
+
+// Pinout for nodemcu with Arduino framework: https://mechatronicsblog.com/esp8266-nodemcu-pinout-for-arduino-ide/
+// | Pin  | Code     | Arduino alias |
+// |======|==========|===============|
+// | A0   | A0       | A0            |
+// | D0   | GPIO 16  | 16            |
+// | D1   | GPIO 5   | 5             |
+// | D2   | GPIO 4   | 4             |
+// | D3   | GPIO 0   | 0             |
+// | D4   | GPIO 2   | 2             |
+// | D5   | GPIO 14  | 14            |
+// | D6   | GPIO 12  | 12            |
+// | D7   | GPIO 13  | 13            |
+// | D8   | GPIO 15  | 15            |
+// | SD2  | GPIO 9   | 9             |
+// | SD3  | GPIO 10  | 10            |
+// | RX   | GPIO 3   | 3             |
+// | TX   | GPIO 1   | 1             |
+
+#define PIN_SERVO 2 // D4
+#define PIN_LED 0 // D3
 
 void colorWipe(uint32_t c, uint8_t wait);
 void rainbow(uint8_t wait);
@@ -19,7 +42,7 @@ uint32_t Wheel(byte WheelPos);
 //   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
 //   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
 //   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(35, PIN, NEO_GRB + NEO_KHZ400);
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(35, PIN_LED, NEO_GRB + NEO_KHZ400);
 
 // IMPORTANT: To reduce NeoPixel burnout risk, add 1000 uF capacitor across
 // pixel power leads, add 300 - 500 Ohm resistor on first pixel's data input
@@ -32,18 +55,18 @@ void setup() {
   strip.begin();
   strip.setBrightness(255);
   strip.show(); // Initialize all pixels to 'off'
+  servo.attach(PIN_SERVO, 800, 2600); // attaches the servo on pin 18 to the servo object
 }
 
 void loop() {
-  // Serial.println("Wipe");
-  // colorWipe(strip.Color(255, 0, 0), 50);
-  // delay(1000);
-  // colorWipe(strip.Color(0, 255, 0), 50);
-  // delay(1000);
-  // colorWipe(strip.Color(0, 0, 255), 50);
-  // delay(1000);
-  Serial.println("Rainbow");
-  rainbow(50);
+  pos = Serial.parseInt();
+  if (pos == 0) {
+    Serial.println("No number was read");
+    return;
+  }
+  Serial.print("Servo position: ");
+  Serial.println(pos);
+  servo.writeMicroseconds(pos);
 }
 
 // Fill the dots one after the other with a color
